@@ -2,7 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "astraback",
   "main": "src/index.ts",
-  "compatibility_date": "2025-05-26"
+  "compatibility_date": "2025-05-26",
+  "routes": [
+    {
+      "pattern": "backend.astraback.pro",
+      "custom_domain": true
+    }
+  ],
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],
