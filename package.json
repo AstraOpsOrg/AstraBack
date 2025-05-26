@@ -1,5 +1,5 @@
 {
-  "name": "AstraBack",
+  "name": "astraback",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
