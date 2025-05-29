@@ -1,6 +1,6 @@
 # prod
 dist/
-
+.cursor/
 # dev
 .yarn/
 !.yarn/releases

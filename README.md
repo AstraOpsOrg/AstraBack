@@ -1,21 +1,11 @@
-```txt
-npm install
-npm run dev
+To install dependencies:
+```sh
+bun install
 ```
 
-```txt
-npm run deploy
+To run:
+```sh
+bun run dev
 ```
 
-[For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
-
-```txt
-npm run cf-typegen
-```
-
-Pass the `CloudflareBindings` as generics when instantiation `Hono`:
-
-```ts
-// src/index.ts
-const app = new Hono<{ Bindings: CloudflareBindings }>()
-```
+open http://localhost:3000
