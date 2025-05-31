@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   astra-backend:
     image: ${DOCKERHUB_USERNAME}/${IMAGE_REPO_NAME}:latest
