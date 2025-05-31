@@ -1,20 +1,19 @@
 // src/index.ts
 import { Hono } from 'hono'
+import { logger } from 'hono/logger';
+import { customAuthMiddleware } from '@/src/utils/Auth';
+import loadV1 from '@/src/apis/v1';
 
 const app = new Hono()
+app.use('*', logger())
+app.use('*', customAuthMiddleware)
 
-app.get('/', (c) => {
-  const greeting = Bun.env.NODE_ENV === 'development' 
-    ? 'Hello from localhost!' 
-    : 'Hello from backend.astraops.pro!';
-  return c.text(greeting)
-})
+loadV1(app)
 
-const internalAppPort = parseInt(process.env.PORT || "3000");
-const appHostname = process.env.NODE_ENV === 'development' ? "localhost" : "0.0.0.0";
+const internalAppPort = parseInt(Bun.env.PORT || "3000");
+const appHostname = Bun.env.NODE_ENV === 'development' ? "localhost" : "0.0.0.0";
 
-console.log(`NODE_ENV is: ${process.env.NODE_ENV}`);
-console.log(`AstraBack is preparing to listen on http://${appHostname}:${internalAppPort}`);
+console.log(`NODE_ENV is: ${Bun.env.NODE_ENV}`);
 
 export default {
   port: internalAppPort,

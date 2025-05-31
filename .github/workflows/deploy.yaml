@@ -57,6 +57,7 @@ jobs:
           script: |
             set -e
             
+            export API_KEY="${{ secrets.API_KEY }}"
             export DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
             export IMAGE_REPO_NAME="astraback" 
             export APP_DIR="/home/${{ secrets.HZ_USER }}/AstraBack"
