@@ -7,5 +7,5 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
-      #- MI_VARIABLE_SECRETA=${VALOR_SECRETO_DEL_ENTORNO_DEL_SERVIDOR}
+      - API_KEY=${API_KEY}
 
