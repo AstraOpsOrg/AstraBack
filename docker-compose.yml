@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  astra-backend:
+    image: ${DOCKERHUB_USERNAME}/${IMAGE_REPO_NAME}:latest
+    container_name: astra-backend-container
+    ports:
+      - "3000:3000" 
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      #- MI_VARIABLE_SECRETA=${VALOR_SECRETO_DEL_ENTORNO_DEL_SERVIDOR}
+
