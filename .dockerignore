@@ -1,5 +1,5 @@
 node_modules
-bun.lockb # Se copia explícitamente, luego se genera dentro del contenedor
+bun.lock
 .git
 .vscode
 *.log
