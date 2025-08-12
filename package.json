@@ -1,13 +1,17 @@
 {
   "name": "astraback",
   "scripts": {
-    "dev": "bun run --hot src/index.ts",
-    "start": "bun run src/index.ts"
+    "dev": "bun run --hot src/server.ts",
+    "start": "bun run src/server.ts",
+    "build": "bun build src/server.ts --outdir ./dist --target bun"
   },
   "dependencies": {
-    "hono": "^4.7.10"
+    "@aws-sdk/client-sts": "^3.682.0",
+    "hono": "^4.7.10",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/uuid": "^10.0.0"
   }
 }
