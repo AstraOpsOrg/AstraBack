@@ -5,3 +5,32 @@ bun.lockb # Se copia explícitamente, luego se genera dentro del contenedor
 *.log
 .cursor/
 .github
+
+.env
+.env.*
+README.md
+docs/
+*.md
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+coverage/
+.nyc_output
+.cache
+
+# Terraform runtime files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Kubernetes runtime files
+*.kubeconfig*
+iac/k8s/.kubeconfig-*
+
+# IDE files
+.idea/
+*.swp
+*.swo
+*~
