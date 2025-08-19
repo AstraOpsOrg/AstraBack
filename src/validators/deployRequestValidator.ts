@@ -8,7 +8,6 @@ export interface ValidationResult {
 const AWS_ACCOUNT_ID_REGEX = /^\d{12}$/;
 const AWS_REGION_REGEX = /^[a-z]+-[a-z]+-\d+$/;
 const IAM_ROLE_ARN_REGEX = /^arn:aws:iam::\d{12}:role\/[a-zA-Z0-9+=,.@_-]+$/;
-const STORAGE_SIZE_REGEX = /^\d+[KMGT]i?$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -116,14 +115,6 @@ export class DeployRequestValidator {
             if (service.environment !== undefined) {
               if (!isPlainObject(service.environment)) {
                 configErrors.push(`${prefix}.environment must be an object (key-value pairs)`);
-              }
-            }
-
-            if (service.storage !== undefined) {
-              if (typeof service.storage !== 'string') {
-                configErrors.push(`${prefix}.storage must be a string (e.g., "10Gi")`);
-              } else if (!STORAGE_SIZE_REGEX.test(service.storage)) {
-                configErrors.push(`${prefix}.storage must be a valid size (e.g., "10Gi", "500Mi", "1Ti")`);
               }
             }
           });

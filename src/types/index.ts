@@ -4,7 +4,6 @@ export interface ServiceConfig {
   image: string;
   port: number;
   environment?: Record<string, string>;
-  storage?: string;
 }
 
 export interface AstraopsConfig {
@@ -25,7 +24,7 @@ export interface DeployRequest {
   astraopsConfig: AstraopsConfig;
 }
 
-export type JobPhase = 'auth' | 'infrastructure' | 'deployment' | 'error';
+export type JobPhase = 'auth' | 'infrastructure' | 'deployment' | 'monitoring' | 'destroy' | 'error';
 export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 
 export interface PhaseStatus {
