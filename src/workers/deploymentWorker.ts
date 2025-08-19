@@ -56,7 +56,7 @@ class DeploymentWorker {
           Expiration: request.awsCredentials.expiration ? new Date(request.awsCredentials.expiration) : undefined
         } as any);
       } else {
-        const credentials = await awsService.assumeUserRole(request.roleArn, jobId);
+  const credentials = await awsService.assumeUserRole(request.roleArn, jobId, request.region);
         if (!credentials || !credentials.Credentials) {
           jobService.addLog(jobId, { phase: 'auth', level: 'error', message: 'Failed to obtain credentials (no CLI creds and AssumeRole failed)' });
           jobService.updatePhaseStatus(jobId, 'auth', 'FAILED');
