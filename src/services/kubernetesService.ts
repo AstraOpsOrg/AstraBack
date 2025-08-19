@@ -28,33 +28,12 @@ export async function kubectlApply(
 
     const kubeconfigPath = `./iac/k8s/.kubeconfig-${jobId}`
     const clusterName = String(request.astraopsConfig?.applicationName)
-    // Map to hide absolute host paths
-    const mapLine = (line: string) => {
-      const trimmed = line.trim()
-      if (!trimmed) return ''
-      let out = trimmed
-      out = out.replaceAll('\\', '/')
-      const cwd = process.cwd().replaceAll('\\', '/').replace(/\/$/, '')
-      if (cwd) out = out.replaceAll(cwd + '/', '')
-      const iacIdx = out.indexOf('/iac/') >= 0 ? out.indexOf('/iac/') : out.indexOf('iac/')
-      if (iacIdx >= 0) {
-        out = out.slice(iacIdx)
-      } else {
-        const replaceAbsPaths = (text: string) =>
-          text.replace(/(\/[\w.-][^\s:]*|[A-Za-z]:\/[^^\s:]*)/g, (m) => {
-            if (/^[a-z]+:\/\//i.test(m)) return m
-            const parts = m.split('/')
-            return parts[parts.length - 1] || m
-          })
-        out = replaceAbsPaths(out)
-      }
-      return out
-    }
+    
     // wait for cluster active
     jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Waiting for EKS cluster ACTIVE: ${clusterName}` })
     const waitCluster = Bun.spawn(['aws', 'eks', 'wait', 'cluster-active', '--name', clusterName, '--region', region], { stdout: 'pipe', stderr: 'pipe', env: envBase })
-    await streamRaw(jobId, 'aws-eks:', waitCluster.stdout, mapLine)
-    await streamRaw(jobId, 'aws-eks:', waitCluster.stderr, mapLine)
+    await streamRaw(jobId, 'aws-eks:', waitCluster.stdout)
+    await streamRaw(jobId, 'aws-eks:', waitCluster.stderr)
     if (await waitCluster.exited !== 0) {
       jobService.addLog(jobId, { phase: 'deployment', level: 'error', message: `Cluster did not reach ACTIVE: ${clusterName}` })
       return { success: false }
@@ -69,8 +48,8 @@ export async function kubectlApply(
         for (const ng of names) {
           jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Waiting for nodegroup ACTIVE: ${ng}` })
           const waitNg = Bun.spawn(['aws', 'eks', 'wait', 'nodegroup-active', '--cluster-name', clusterName, '--nodegroup-name', ng, '--region', region], { stdout: 'pipe', stderr: 'pipe', env: envBase })
-          await streamRaw(jobId, 'aws-eks:', waitNg.stdout, mapLine)
-          await streamRaw(jobId, 'aws-eks:', waitNg.stderr, mapLine)
+          await streamRaw(jobId, 'aws-eks:', waitNg.stdout)
+          await streamRaw(jobId, 'aws-eks:', waitNg.stderr)
           await waitNg.exited
         }
       } catch {}
@@ -93,8 +72,8 @@ export async function kubectlApply(
     // update kubeconfig with retry
     const doUpdate = async () => {
       const update = Bun.spawn(['aws', 'eks', 'update-kubeconfig', '--name', clusterName, '--region', region, '--kubeconfig', kubeconfigPath], { stdout: 'pipe', stderr: 'pipe', env: envBase })
-      await streamRaw(jobId, 'aws-eks:', update.stdout, mapLine)
-      await streamRaw(jobId, 'aws-eks:', update.stderr, mapLine)
+      await streamRaw(jobId, 'aws-eks:', update.stdout)
+      await streamRaw(jobId, 'aws-eks:', update.stderr)
       const code = await update.exited
       if (code !== 0) throw new Error('update-kubeconfig failed')
     }
@@ -122,21 +101,21 @@ export async function kubectlApply(
     jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Applying manifests for ${appName}` })
     // wait nodes Ready (best-effort)
     const waitNodes = Bun.spawn(['kubectl', 'wait', 'nodes', '--for=condition=Ready', '--all', '--timeout=180s'], { stdout: 'pipe', stderr: 'pipe', env })
-    await streamRaw(jobId, 'kubectl:', waitNodes.stdout, mapLine)
-    await streamRaw(jobId, 'kubectl:', waitNodes.stderr, mapLine)
+    await streamRaw(jobId, 'kubectl:', waitNodes.stdout)
+    await streamRaw(jobId, 'kubectl:', waitNodes.stderr)
     await waitNodes.exited
 
     const doApply = async () => {
       // Apply namespace first to avoid "namespace not found"
       const nsFile = `${outDir}/00-namespace.yaml`
       const ns = Bun.spawn(['kubectl', 'apply', '--validate=false', '-f', nsFile], { stdout: 'pipe', stderr: 'pipe', env })
-      await streamRaw(jobId, 'kubectl:', ns.stdout, mapLine)
-      await streamRaw(jobId, 'kubectl:', ns.stderr, mapLine)
+      await streamRaw(jobId, 'kubectl:', ns.stdout)
+      await streamRaw(jobId, 'kubectl:', ns.stderr)
       await ns.exited
 
       const p = Bun.spawn(['kubectl', 'apply', '--server-side', '--force-conflicts', '--validate=false', '-f', outDir], { stdout: 'pipe', stderr: 'pipe', env })
-      await streamRaw(jobId, 'kubectl:', p.stdout, mapLine)
-      await streamRaw(jobId, 'kubectl:', p.stderr, mapLine)
+      await streamRaw(jobId, 'kubectl:', p.stdout)
+      await streamRaw(jobId, 'kubectl:', p.stderr)
       const code = await p.exited
       if (code !== 0) throw new Error('kubectl apply failed')
     }
@@ -150,25 +129,25 @@ export async function kubectlApply(
   // Global wait: all Deployments in the namespace become Available (up to 5 min)
     try {
       const waitAll = Bun.spawn(['kubectl', 'wait', 'deploy', '--for=condition=Available', '--all', '-n', appName, '--timeout=300s'], { stdout: 'pipe', stderr: 'pipe', env })
-      await streamRaw(jobId, 'kubectl:', waitAll.stdout, mapLine)
-      await streamRaw(jobId, 'kubectl:', waitAll.stderr, mapLine)
+      await streamRaw(jobId, 'kubectl:', waitAll.stdout)
+      await streamRaw(jobId, 'kubectl:', waitAll.stderr)
       const code = await waitAll.exited
       if (code !== 0) {
         jobService.addLog(jobId, { phase: 'deployment', level: 'error', message: 'Deployments not Available within timeout. Collecting diagnostics...' })
     // Summary status
         const getAll = Bun.spawn(['kubectl', '-n', appName, 'get', 'deploy,rs,po', '-o', 'wide'], { stdout: 'pipe', stderr: 'pipe', env })
-        await streamRaw(jobId, 'kubectl:', getAll.stdout, mapLine)
-        await streamRaw(jobId, 'kubectl:', getAll.stderr, mapLine)
+        await streamRaw(jobId, 'kubectl:', getAll.stdout)
+        await streamRaw(jobId, 'kubectl:', getAll.stderr)
         await getAll.exited
     // Describe all deployments
         const desc = Bun.spawn(['kubectl', '-n', appName, 'describe', 'deploy', '--all'], { stdout: 'pipe', stderr: 'pipe', env })
-        await streamRaw(jobId, 'kubectl:', desc.stdout, mapLine)
-        await streamRaw(jobId, 'kubectl:', desc.stderr, mapLine)
+        await streamRaw(jobId, 'kubectl:', desc.stdout)
+        await streamRaw(jobId, 'kubectl:', desc.stderr)
         await desc.exited
     // Recent events
         const ev = Bun.spawn(['kubectl', '-n', appName, 'get', 'events', '--sort-by=.lastTimestamp'], { stdout: 'pipe', stderr: 'pipe', env })
-        await streamRaw(jobId, 'kubectl:', ev.stdout, mapLine)
-        await streamRaw(jobId, 'kubectl:', ev.stderr, mapLine)
+        await streamRaw(jobId, 'kubectl:', ev.stdout)
+        await streamRaw(jobId, 'kubectl:', ev.stderr)
         await ev.exited
     // Logs from problematic pods (ImagePull/CrashLoop)
         try {
@@ -183,8 +162,8 @@ export async function kubectlApply(
           for (const pod of badPods) {
             const podName = pod?.metadata?.name || 'pod'
             const lg = Bun.spawn(['kubectl', '-n', appName, 'logs', podName, '--all-containers', '--tail=200'], { stdout: 'pipe', stderr: 'pipe', env })
-            await streamRaw(jobId, 'kubectl:', lg.stdout, mapLine)
-            await streamRaw(jobId, 'kubectl:', lg.stderr, mapLine)
+            await streamRaw(jobId, 'kubectl:', lg.stdout)
+            await streamRaw(jobId, 'kubectl:', lg.stderr)
             await lg.exited
           }
         } catch {}
