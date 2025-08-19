@@ -1,17 +1,7 @@
 // Types for AstraOps unified deployment system
-
-export interface Repository {
-  url: string;
-  branch: string;
-}
-
 export interface ServiceConfig {
   name: string;
-  build?: {
-    context: string;
-    dockerfile: string;
-  };
-  image?: string;
+  image: string;
   port: number;
   environment?: Record<string, string>;
   storage?: string;
@@ -26,7 +16,12 @@ export interface DeployRequest {
   accountId: string;
   region: string;
   roleArn: string;
-  repository: Repository;
+  awsCredentials?: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken: string;
+    expiration?: string;
+  };
   astraopsConfig: AstraopsConfig;
 }
 

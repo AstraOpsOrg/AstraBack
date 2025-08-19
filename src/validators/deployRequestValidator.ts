@@ -32,7 +32,7 @@ export class DeployRequestValidator {
     }
 
     // Validate required fields
-    const requiredFields = ['accountId', 'region', 'roleArn', 'repository', 'astraopsConfig'];
+    const requiredFields = ['accountId', 'region', 'roleArn', 'astraopsConfig'];
     const missingFields = requiredFields.filter(field => !requestBody[field]);
     
     if (missingFields.length > 0) {
@@ -64,35 +64,15 @@ export class DeployRequestValidator {
       }
     }
 
-    if (requestBody.repository !== undefined) {
-      const repository = requestBody.repository;
-      const repositoryErrors: string[] = [];
-
-      if (!isPlainObject(repository)) {
-        repositoryErrors.push('repository must be an object');
+    if (requestBody.awsCredentials !== undefined) {
+      const c = requestBody.awsCredentials;
+      if (!isPlainObject(c)) {
+        errors.push('awsCredentials must be an object');
       } else {
-        if (!repository.url || typeof repository.url !== 'string') {
-          repositoryErrors.push('repository.url is required and must be a string');
-        } else {
-          try {
-            const url = new URL(repository.url);
-            if (!['https:'].includes(url.protocol)) {
-              repositoryErrors.push('repository.url must be a valid HTTPS URL');
-            }
-          } catch {
-            repositoryErrors.push('repository.url must be a valid URL');
-          }
-        }
-
-        if (!repository.branch || typeof repository.branch !== 'string') {
-          repositoryErrors.push('repository.branch is required and must be a string');
-        } else if (repository.branch.trim().length === 0) {
-          repositoryErrors.push('repository.branch cannot be empty');
-        }
-      }
-
-      if (repositoryErrors.length) {
-        errors.push(...repositoryErrors);
+        if (!isNonEmptyString(c.accessKeyId)) errors.push('awsCredentials.accessKeyId is required');
+        if (!isNonEmptyString(c.secretAccessKey)) errors.push('awsCredentials.secretAccessKey is required');
+        if (!isNonEmptyString(c.sessionToken)) errors.push('awsCredentials.sessionToken is required');
+        if (c.expiration && !isNonEmptyString(c.expiration)) errors.push('awsCredentials.expiration must be a string if provided');
       }
     }
 
@@ -129,24 +109,8 @@ export class DeployRequestValidator {
               configErrors.push(`${prefix}.port must be between 1 and 65535`);
             }
 
-            const hasBuild = service.build && typeof service.build === 'object';
-            const hasImage = service.image && typeof service.image === 'string';
-
-            if (!hasBuild && !hasImage) {
-              configErrors.push(`${prefix} must have either 'build' configuration or 'image' specified`);
-            }
-            if (hasBuild && hasImage) {
-              configErrors.push(`${prefix} cannot have both 'build' and 'image' - choose one`);
-            }
-
-            if (hasBuild) {
-              const build = service.build as { context?: unknown; dockerfile?: unknown };
-              if (!isNonEmptyString(build.context)) {
-                configErrors.push(`${prefix}.build.context is required and must be a string`);
-              }
-              if (!isNonEmptyString(build.dockerfile)) {
-                configErrors.push(`${prefix}.build.dockerfile is required and must be a string`);
-              }
+            if (!isNonEmptyString(service.image)) {
+              configErrors.push(`${prefix}.image is required and must be a non-empty string (e.g., "usuario/imagen:tag")`);
             }
 
             if (service.environment !== undefined) {
