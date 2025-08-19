@@ -27,7 +27,8 @@ function loadV1(app: Hono) {
       }
     })
   })
-  
+
+  // Deploy endpoint
   app.post(`/v${version}/deploy`, async (ctx) => {
     try {
       const requestBody = await ctx.req.json().catch(() => undefined)
@@ -71,6 +72,7 @@ function loadV1(app: Hono) {
     }
   })
 
+  // Destroy endpoint
   app.post(`/v${version}/destroy`, async (ctx) => {
     try {
       const requestBody = await ctx.req.json().catch(() => undefined)
@@ -260,6 +262,7 @@ function loadV1(app: Hono) {
     })
   })
 
+  // Monitoring logs endpoint
   app.get(`/v${version}/deploy/:jobId/monitoring/logs`, (ctx) => {
     console.log(
       `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting MONITORING SSE for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
@@ -351,6 +354,7 @@ function loadV1(app: Hono) {
     })
   })
 
+  // Destroy logs endpoint
   app.get(`/v${version}/destroy/:jobId/destroy/logs`, (ctx) => {
     console.log(
       `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting DESTROY SSE for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
@@ -568,6 +572,33 @@ function loadV1(app: Hono) {
     }))
     return ctx.json({ status: 200, jobs }, 200)
   })
+
+  // Debug endpoint: show CLI versions installed inside the container
+  app.get(`/v${version}/debug/cli-versions`, async (ctx) => {
+    async function run(cmd: string): Promise<string> {
+      try {
+        const p = Bun.spawn(["bash", "-lc", cmd], { stdout: "pipe", stderr: "pipe" })
+        await p.exited
+        const [out, err] = await Promise.all([
+          new Response(p.stdout).text(),
+          new Response(p.stderr).text(),
+        ])
+        const text = `${(out || '').trim()}\n${(err || '').trim()}`.trim()
+        return text || 'n/a'
+      } catch (e) {
+        return 'n/a'
+      }
+    }
+
+    const versions = {
+      terraform: await run('terraform version | head -n1'),
+      kubectl: await run('kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null || kubectl version 2>/dev/null || echo "kubectl not found"'),
+      awscli: await run('aws --version | head -n1'),
+      helm: await run('helm version --short 2>/dev/null || helm version 2>/dev/null || echo "helm not found"'),
+    }
+
+    return ctx.json({ status: 200, versions }, 200)
+  })
   
   // Simulation-only endpoint: runs infrastructure + application simulations with raw logs
   app.post(`/v${version}/deploy/simulate`, async (ctx) => {
@@ -678,10 +709,7 @@ function loadV1(app: Hono) {
       console.error('Monitoring setup error:', e?.message || e)
       return ctx.json({ status: 500, errors: ['Monitoring setup failed'] }, 500)
     }
-  })
-  
-  
-  
+  }) 
 }
 
 export default loadV1
