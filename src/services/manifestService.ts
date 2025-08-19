@@ -12,9 +12,6 @@ function renderEnv(env?: Record<string, string>): string {
 function renderDeployment(namespace: string, service: ServiceConfig, revision?: string): string {
   const image = service.image || 'nginx:alpine'
   const containerPort = service.port
-  const wantsStorage = Boolean(service.storage)
-  const volumeName = `${service.name}-data`
-  const mountPath = '/data/db'
   const hasRevision = typeof revision === 'string' && revision.length > 0
   return [
     'apiVersion: apps/v1',
@@ -37,8 +34,6 @@ function renderDeployment(namespace: string, service: ServiceConfig, revision?: 
     `          image: ${image}`,
     `          imagePullPolicy: Always`,
     `          ports: [{ containerPort: ${containerPort} }]${renderEnv(service.environment)}`,
-    wantsStorage ? `          volumeMounts:\n            - name: ${volumeName}\n              mountPath: ${mountPath}` : '',
-    wantsStorage ? `      volumes:\n        - name: ${volumeName}\n          persistentVolumeClaim:\n            claimName: ${service.name}-pvc` : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -70,21 +65,6 @@ function renderNamespace(namespace: string): string {
   ].join('\n')
 }
 
-function renderPVC(namespace: string, service: ServiceConfig): string {
-  return [
-    'apiVersion: v1',
-    'kind: PersistentVolumeClaim',
-    'metadata:',
-    `  name: ${service.name}-pvc`,
-    `  namespace: ${namespace}`,
-    'spec:',
-    '  accessModes: [ "ReadWriteOnce" ]',
-    '  resources:',
-    '    requests:',
-    `      storage: ${service.storage}`,
-  ].join('\n')
-}
-
 // Generate dynamic multi-file manifests from astraops.yaml
 export async function writeManifestsToDirectory(config: AstraopsConfig, targetDir: string, revision?: string): Promise<string> {
   await mkdir(targetDir, { recursive: true })
@@ -97,10 +77,6 @@ export async function writeManifestsToDirectory(config: AstraopsConfig, targetDi
     const serviceYaml = renderService(ns, svc) + '\n'
     await Bun.write(`${targetDir}/${svc.name}-deploy.yaml`, deployYaml)
     await Bun.write(`${targetDir}/${svc.name}-svc.yaml`, serviceYaml)
-    if (svc.storage) {
-      const pvcYaml = renderPVC(ns, svc) + '\n'
-      await Bun.write(`${targetDir}/${svc.name}-pvc.yaml`, pvcYaml)
-    }
   }
   return targetDir
 }
