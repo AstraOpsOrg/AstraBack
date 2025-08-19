@@ -1,20 +1,9 @@
 // Types for AstraOps unified deployment system
-
-export interface Repository {
-  url: string;
-  branch: string;
-}
-
 export interface ServiceConfig {
   name: string;
-  build?: {
-    context: string;
-    dockerfile: string;
-  };
-  image?: string;
+  image: string;
   port: number;
   environment?: Record<string, string>;
-  storage?: string;
 }
 
 export interface AstraopsConfig {
@@ -26,11 +15,16 @@ export interface DeployRequest {
   accountId: string;
   region: string;
   roleArn: string;
-  repository: Repository;
+  awsCredentials?: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken: string;
+    expiration?: string;
+  };
   astraopsConfig: AstraopsConfig;
 }
 
-export type JobPhase = 'auth' | 'infrastructure' | 'deployment' | 'error';
+export type JobPhase = 'auth' | 'infrastructure' | 'deployment' | 'monitoring' | 'destroy' | 'error';
 export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 
 export interface PhaseStatus {

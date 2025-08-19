@@ -1,6 +1,5 @@
 import type { DeployRequest } from '@/types'
 import { jobService } from '@/services/jobService'
-import { formatDateEs } from '@/utils/date'
 
 export async function simulateInfrastructureSetup(jobId: string, _request: DeployRequest): Promise<void> {
   const steps = [
@@ -25,14 +24,14 @@ export async function simulateInfrastructureSetup(jobId: string, _request: Deplo
 export async function simulateApplicationDeployment(jobId: string, request: DeployRequest): Promise<void> {
   const { astraopsConfig } = request
 
-  jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Building application: ${astraopsConfig.applicationName}` })
+  jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Using prebuilt images declared in astraops.yaml (app: ${astraopsConfig.applicationName})` })
 
   for (const service of astraopsConfig.services) {
     await new Promise((resolve) => setTimeout(resolve, 2000))
-    jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Building service: ${service.name}` })
+    jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Service image referenced: ${service.name} → ${service.image}` })
 
     await new Promise((resolve) => setTimeout(resolve, 1000))
-    jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Service ${service.name} built and pushed to ECR` })
+    jobService.addLog(jobId, { phase: 'deployment', level: 'info', message: `Service ${service.name} ready (prebuilt image)` })
   }
 
   await new Promise((resolve) => setTimeout(resolve, 1500))

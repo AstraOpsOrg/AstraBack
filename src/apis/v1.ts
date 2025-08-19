@@ -7,6 +7,9 @@ import { simulateInfrastructureSetup, simulateApplicationDeployment } from '@/wo
 import { logStreamService } from '@/services/logStreamService'
 import { validateDeployRequest } from '@/validators/deployRequestValidator'
 import { formatDateEs } from "@/utils/date"
+import { setupMonitoringAndGetUrl } from '@/services/monitoringService'
+import { awsService } from '@/services/awsService'
+import { runTerraformDestroy } from '@/services/destroy'
 
 const version = '1'
 
@@ -68,6 +71,50 @@ function loadV1(app: Hono) {
     }
   })
 
+  app.post(`/v${version}/destroy`, async (ctx) => {
+    try {
+      const requestBody = await ctx.req.json().catch(() => undefined)
+      const validation = validateDeployRequest(requestBody)
+      if (!validation.isValid) {
+        return ctx.json({ status: 400, errors: validation.errors }, 400)
+      }
+      const destroyRequest = requestBody as DeployRequest
+      const job = jobService.createJob(destroyRequest)
+
+      ;(async () => {
+        try {
+          jobService.updateJobStatus(job.id, 'RUNNING')
+          jobService.updatePhaseStatus(job.id, 'auth', 'RUNNING')
+          jobService.addLog(job.id, { phase: 'auth', level: 'info', message: `Using temporary AWS credentials provided by CLI` })
+          jobService.updatePhaseStatus(job.id, 'auth', 'COMPLETED')
+
+          jobService.updatePhaseStatus(job.id, 'infrastructureSetup', 'RUNNING')
+          const creds = destroyRequest.awsCredentials
+            ? {
+                AccessKeyId: destroyRequest.awsCredentials.accessKeyId,
+                SecretAccessKey: destroyRequest.awsCredentials.secretAccessKey,
+                SessionToken: destroyRequest.awsCredentials.sessionToken,
+              }
+            : undefined
+          if (!creds) throw new Error('No AWS STS credentials provided')
+          const ok = await runTerraformDestroy(job.id, destroyRequest, creds)
+          jobService.updatePhaseStatus(job.id, 'infrastructureSetup', ok.success ? 'COMPLETED' : 'FAILED')
+          jobService.updatePhaseStatus(job.id, 'applicationDeploy', 'SKIPPED')
+          jobService.updateJobStatus(job.id, ok.success ? 'COMPLETED' : 'FAILED')
+          jobService.addLog(job.id, { phase: ok.success ? 'deployment' : 'error', level: ok.success ? 'success' : 'error', message: ok.success ? 'Destroy completed successfully' : 'Destroy failed' })
+        } catch (e) {
+          jobService.updatePhaseStatus(job.id, 'infrastructureSetup', 'FAILED')
+          jobService.updateJobStatus(job.id, 'FAILED')
+          jobService.addLog(job.id, { phase: 'error', level: 'error', message: 'Destroy failed' })
+        }
+      })()
+
+      return ctx.json({ jobId: job.id, status: job.status, phases: job.phases, message: 'Destroy initiated' }, 202)
+    } catch (e) {
+      return ctx.json({ status: 500, errors: ['Internal server error'] }, 500)
+    }
+  })
+
   // Get job status
   app.get(`/v${version}/deploy/:jobId/status`, (ctx) => {
     const jobId = ctx.req.param('jobId')
@@ -100,6 +147,9 @@ function loadV1(app: Hono) {
 
   // Server-Sent Events endpoint for real-time logs
   app.get(`/v${version}/deploy/:jobId/logs`, (ctx) => {
+    console.log(
+      `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting SSE for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
+    )
     const jobId = ctx.req.param('jobId')
     const job = jobService.getJob(jobId)
 
@@ -143,7 +193,7 @@ function loadV1(app: Hono) {
           return false
         }
 
-        const unsubscribe = logStreamService.subscribeToLogs(jobId, (logMessage) => {
+  const unsubscribe = logStreamService.subscribeToLogs(jobId, (logMessage) => {
           if (!isActive) return
           stream.writeSSE({ data: JSON.stringify(logMessage), event: 'log' })
             .then(() => {
@@ -170,9 +220,10 @@ function loadV1(app: Hono) {
         // Send heartbeat every 30 seconds
         const heartbeatInterval = setInterval(() => {
           if (isActive) {
+            const ts = formatDateEs(new Date())
             stream.writeSSE({
-              data: JSON.stringify({ type: 'heartbeat', timestamp: formatDateEs(new Date()) }),
-              event: 'heartbeat'
+              data: `[${ts}] [heartbeat]`,
+              event: 'raw'
             }).catch(() => {
               if (pendingResolve) cleanupAndResolve(pendingResolve)
             })
@@ -203,6 +254,295 @@ function loadV1(app: Hono) {
             type: 'error',
             message: 'Failed to setup log stream'
           }),
+          event: 'error'
+        })
+      }
+    })
+  })
+
+  app.get(`/v${version}/deploy/:jobId/monitoring/logs`, (ctx) => {
+    console.log(
+      `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting MONITORING SSE for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
+    )
+    const jobId = ctx.req.param('jobId')
+    const job = jobService.getJob(jobId)
+
+    if (!job) {
+      return ctx.json({ status: 404, errors: ['Job not found'] }, 404)
+    }
+
+  return streamSSE(ctx, async (stream) => {
+      try {
+        let isActive = true
+        let resolved = false
+        let pendingResolve: (() => void) | null = null
+
+        const cleanupAndResolve = (resolveFn: () => void) => {
+          if (resolved) return
+          isActive = false
+          try { unsubscribe() } catch {}
+          try { unsubscribeRaw() } catch {}
+          clearInterval(heartbeatInterval)
+          resolved = true
+          resolveFn()
+        }
+
+        const shouldCloseOnRaw = (line: string) => {
+          // Close when monitoring completes or on explicit failure
+          if (line.includes('Monitoring setup completed:')) return true
+          if (line.toLowerCase().includes('helm upgrade --install failed')) return true
+          if (line.toLowerCase().includes('failed to get grafana svc')) return true
+          if (line.toLowerCase().includes('grafana loadbalancer not ready')) return true
+          return false
+        }
+
+        const shouldCloseOnLog = (logMessage: any) => {
+          const msg = String(logMessage?.message || '')
+          const phase = String(logMessage?.phase || '')
+          const level = String(logMessage?.level || '')
+          if (phase === 'monitoring' && level === 'success' && msg.startsWith('Monitoring setup completed')) return true
+          if (phase === 'monitoring' && level === 'error') return true
+          return false
+        }
+
+        const unsubscribe = logStreamService.subscribeToLogs(jobId, (logMessage) => {
+          if (!isActive) return
+          if (shouldCloseOnLog(logMessage)) {
+            setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 0)
+          }
+        })
+
+        const unsubscribeRaw = logStreamService.subscribeToRaw(jobId, (line) => {
+          if (!isActive) return
+          stream.writeSSE({ data: line, event: 'raw' }).then(() => {
+            if (shouldCloseOnRaw(line)) {
+              setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 0)
+            }
+          }).catch((err) => {
+            console.error('SSE monitoring raw write error:', err)
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+
+        const heartbeatInterval = setInterval(() => {
+          if (isActive) {
+            const ts = formatDateEs(new Date())
+            stream.writeSSE({ data: `[${ts}] [heartbeat]`, event: 'raw' }).catch(() => {
+              if (pendingResolve) cleanupAndResolve(pendingResolve)
+            })
+          } else {
+            clearInterval(heartbeatInterval)
+          }
+        }, 30000)
+
+        await new Promise<void>((resolve) => {
+          pendingResolve = resolve
+          stream.onAbort(() => {
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+      } catch (error) {
+        console.error('SSE monitoring setup error:', error)
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'error', message: 'Failed to setup monitoring log stream' }),
+          event: 'error'
+        })
+      }
+    })
+  })
+
+  app.get(`/v${version}/destroy/:jobId/destroy/logs`, (ctx) => {
+    console.log(
+      `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting DESTROY SSE for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
+    )
+    const jobId = ctx.req.param('jobId')
+    const job = jobService.getJob(jobId)
+
+    if (!job) {
+      return ctx.json({ status: 404, errors: ['Job not found'] }, 404)
+    }
+
+  return streamSSE(ctx, async (stream) => {
+      try {
+        let isActive = true
+        let resolved = false
+        let pendingResolve: (() => void) | null = null
+
+        const cleanupAndResolve = (resolveFn: () => void) => {
+          if (resolved) return
+          isActive = false
+          try { unsubscribe() } catch {}
+          try { unsubscribeRaw() } catch {}
+          clearInterval(heartbeatInterval)
+          resolved = true
+          resolveFn()
+        }
+
+        const shouldCloseOnRaw = (line: string) => {
+          if (line.includes('Terraform destroy completed')) return true
+          if (line.includes('S3 bucket') && line.includes('removed successfully')) return true
+          if (line.toLowerCase().includes('terraform destroy failed')) return true
+          if (line.toLowerCase().includes('destroy failed')) return true
+          return false
+        }
+
+        const shouldCloseOnLog = (logMessage: any) => {
+          const msg = String(logMessage?.message || '')
+          const phase = String(logMessage?.phase || '')
+          const level = String(logMessage?.level || '')
+          if (phase === 'destroy' && level === 'success' && msg.includes('completed')) return true
+          if (phase === 'destroy' && level === 'error') return true
+          if (phase === 'infrastructure' && level === 'success' && msg.includes('Terraform destroy completed')) return true
+          if (phase === 'infrastructure' && level === 'error' && msg.includes('destroy failed')) return true
+          return false
+        }
+
+        const unsubscribe = logStreamService.subscribeToLogs(jobId, (logMessage) => {
+          if (!isActive) return
+          if (shouldCloseOnLog(logMessage)) {
+            setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 0)
+          }
+        })
+
+        const unsubscribeRaw = logStreamService.subscribeToRaw(jobId, (line) => {
+          if (!isActive) return
+          stream.writeSSE({ data: line, event: 'raw' }).then(() => {
+            if (shouldCloseOnRaw(line)) {
+              setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 0)
+            }
+          }).catch((err) => {
+            console.error('SSE destroy raw write error:', err)
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+
+        const heartbeatInterval = setInterval(() => {
+          if (isActive) {
+            const ts = formatDateEs(new Date())
+            stream.writeSSE({ data: `[${ts}] [heartbeat]`, event: 'raw' }).catch(() => {
+              if (pendingResolve) cleanupAndResolve(pendingResolve)
+            })
+          } else {
+            clearInterval(heartbeatInterval)
+          }
+        }, 30000)
+
+        await new Promise<void>((resolve) => {
+          pendingResolve = resolve
+          stream.onAbort(() => {
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+      } catch (error) {
+        console.error('SSE destroy setup error:', error)
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'error', message: 'Failed to setup destroy log stream' }),
+          event: 'error'
+        })
+      }
+    })
+  })
+
+  // Server-Sent Events endpoint for real-time logs (destroy)
+  app.get(`/v${version}/destroy/:jobId/logs`, (ctx) => {
+    console.log(
+      `\x1b[36m[ASTRAOPS-SSE]\x1b[0m Starting SSE (destroy) for \x1b[33m${ctx.req.param('jobId')}\x1b[0m`
+    )
+    const jobId = ctx.req.param('jobId')
+    const job = jobService.getJob(jobId)
+
+    if (!job) {
+      return ctx.json({
+        status: 404,
+        errors: ['Job not found']
+      }, 404)
+    }
+
+    return streamSSE(ctx, async (stream) => {
+      try {
+        // Send existing logs first
+        for (const log of job.logs) {
+          await stream.writeSSE({
+            data: JSON.stringify(log),
+            event: 'log'
+          })
+        }
+
+        // Subscribe to in-process log stream for this jobId
+        let isActive = true
+        let resolved = false
+        let pendingResolve: (() => void) | null = null
+        const cleanupAndResolve = (resolveFn: () => void) => {
+          if (resolved) return
+          isActive = false
+          try { unsubscribe() } catch {}
+          try { unsubscribeRaw() } catch {}
+          clearInterval(heartbeatInterval)
+          resolved = true
+          resolveFn()
+        }
+
+        const shouldCloseOnLog = (logMessage: any) => {
+          const msg = String(logMessage?.message || '')
+          const phase = String(logMessage?.phase || '')
+          const level = String(logMessage?.level || '')
+          if (phase === 'deployment' && level === 'success' && msg.startsWith('Destroy completed successfully')) return true
+          if (phase === 'error' && level === 'error' && msg.startsWith('Destroy failed')) return true
+          return false
+        }
+
+        const unsubscribe = logStreamService.subscribeToLogs(jobId, (logMessage) => {
+          if (!isActive) return
+          stream.writeSSE({ data: JSON.stringify(logMessage), event: 'log' })
+            .then(() => {
+              if (shouldCloseOnLog(logMessage)) {
+                setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 0)
+              }
+            })
+            .catch(err => {
+              console.error('SSE write error (destroy):', err)
+              if (pendingResolve) cleanupAndResolve(pendingResolve)
+            })
+        })
+
+        const unsubscribeRaw = logStreamService.subscribeToRaw(jobId, (line) => {
+          if (!isActive) return
+          stream.writeSSE({ data: line, event: 'raw' }).catch(err => {
+            console.error('SSE raw write error (destroy):', err)
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+
+        const heartbeatInterval = setInterval(() => {
+          if (isActive) {
+            const ts = formatDateEs(new Date())
+            stream.writeSSE({
+              data: `[${ts}] [heartbeat]`,
+              event: 'raw'
+            }).catch(() => {
+              if (pendingResolve) cleanupAndResolve(pendingResolve)
+            })
+          } else {
+            clearInterval(heartbeatInterval)
+          }
+        }, 30000)
+
+        const latest = jobService.getJob(jobId)
+        if (latest && latest.status !== 'RUNNING' && latest.status !== 'PENDING') {
+          setTimeout(() => pendingResolve && cleanupAndResolve(pendingResolve), 50)
+        }
+
+        await new Promise<void>((resolve) => {
+          pendingResolve = resolve
+          stream.onAbort(() => {
+            if (pendingResolve) cleanupAndResolve(pendingResolve)
+          })
+        })
+
+      } catch (error) {
+        console.error('SSE setup error (destroy):', error)
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'error', message: 'Failed to setup destroy log stream' }),
           event: 'error'
         })
       }
@@ -259,8 +599,7 @@ function loadV1(app: Hono) {
 
           // App simulation with some raw lines
           jobService.updatePhaseStatus(job.id, 'applicationDeploy', 'RUNNING')
-          jobService.addRawLog(job.id, 'docker: Building image demo-frontend:latest')
-          jobService.addRawLog(job.id, 'docker: Pushing to ECR ...')
+          jobService.addRawLog(job.id, 'kubectl: Using prebuilt images from astraops.yaml')
           await simulateApplicationDeployment(job.id, deployRequest)
           jobService.addRawLog(job.id, 'kubectl: Applying manifests...')
           jobService.addRawLog(job.id, 'kubectl: rollout status deployment/demo-frontend: success')
@@ -285,6 +624,59 @@ function loadV1(app: Hono) {
     } catch (error) {
       console.error('Deploy simulate endpoint error:', error)
       return ctx.json({ status: 500, errors: ['Internal server error'] }, 500)
+    }
+  })
+
+  // Setup monitoring (Grafana) after successful deploy
+  app.post(`/v${version}/deploy/:jobId/monitoring`, async (ctx) => {
+    try {
+      const jobId = ctx.req.param('jobId')
+      const job = jobService.getJob(jobId)
+      if (!job) return ctx.json({ status: 404, errors: ['Job not found'] }, 404)
+      if (job.status !== 'COMPLETED') return ctx.json({ status: 409, errors: ['Job is not completed'] }, 409)
+
+      const region = String(job.request.region)
+      const clusterName = String(job.request.astraopsConfig?.applicationName)
+
+      // Resolve credentials in order of preference:
+      // 1) In-memory creds from deployment worker (if still present)
+      // 2) STS creds provided originally by the CLI in the job request (if present and not expired)
+      // 3) Re-assume role from backend using roleArn + region
+      let resolvedCreds: { AccessKeyId: string; SecretAccessKey: string; SessionToken: string } | undefined
+
+      const memCreds = (deploymentWorker as any).getJobCredentials?.call?.(deploymentWorker, jobId) || undefined
+      if (memCreds?.AccessKeyId && memCreds?.SecretAccessKey && memCreds?.SessionToken) {
+        resolvedCreds = {
+          AccessKeyId: String(memCreds.AccessKeyId),
+          SecretAccessKey: String(memCreds.SecretAccessKey),
+          SessionToken: String(memCreds.SessionToken),
+        }
+      } else if (job.request?.awsCredentials?.accessKeyId && job.request?.awsCredentials?.secretAccessKey && job.request?.awsCredentials?.sessionToken) {
+        resolvedCreds = {
+          AccessKeyId: String(job.request.awsCredentials.accessKeyId),
+          SecretAccessKey: String(job.request.awsCredentials.secretAccessKey),
+          SessionToken: String(job.request.awsCredentials.sessionToken),
+        }
+      } else if (job.request?.roleArn) {
+        const assumed = await awsService.assumeUserRole(String(job.request.roleArn), jobId, region)
+        const c = assumed?.Credentials
+        if (c?.AccessKeyId && c?.SecretAccessKey && c?.SessionToken) {
+          resolvedCreds = {
+            AccessKeyId: String(c.AccessKeyId),
+            SecretAccessKey: String(c.SecretAccessKey),
+            SessionToken: String(c.SessionToken),
+          }
+        }
+      }
+
+      if (!resolvedCreds) return ctx.json({ status: 500, errors: ['No credentials available to access user cluster'] }, 500)
+
+  const { url, username, password } = await setupMonitoringAndGetUrl(region, clusterName, resolvedCreds, jobId)
+
+  return ctx.json({ status: 200, url, username, password }, 200)
+    } catch (e: any) {
+      console.error('Monitoring setup error:', e?.message || e)
+      return ctx.json({ status: 500, errors: ['Monitoring setup failed'] }, 500)
     }
   })
   
