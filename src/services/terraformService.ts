@@ -41,6 +41,54 @@ export async function runTerraformApply(
     // Init with S3 backend (bucket per account)
     const bucketName = `astraops-tfstate-${request.accountId}`
     const stateKey = 'infrastructure/terraform.tfstate'
+
+    // Ensure backend bucket exists and report whether remote state exists
+    try {
+      // Check bucket
+      const headBucket = Bun.spawn(['aws', 's3api', 'head-bucket', '--bucket', bucketName, '--region', region], { stdout: 'pipe', stderr: 'pipe', env })
+      await new Response(headBucket.stdout).text();
+      await new Response(headBucket.stderr).text();
+      const headExit = await headBucket.exited
+      if (headExit !== 0) {
+        jobService.addLog(jobId, { phase: 'infrastructure', level: 'info', message: `S3 backend bucket not found. Creating: ${bucketName}` })
+        const args = ['s3api', 'create-bucket', '--bucket', bucketName, '--region', region]
+        if (region !== 'us-east-1') {
+          args.push('--create-bucket-configuration', `LocationConstraint=${region}`)
+        }
+        const create = Bun.spawn(['aws', ...args], { stdout: 'pipe', stderr: 'pipe', env })
+        await streamRaw(jobId, 'terraform:', create.stdout)
+        await streamRaw(jobId, 'terraform:', create.stderr)
+        const createExit = await create.exited
+        if (createExit === 0) {
+          jobService.addLog(jobId, { phase: 'infrastructure', level: 'success', message: `S3 bucket created: ${bucketName}` })
+          // Best-effort enable versioning
+          try {
+            const vers = Bun.spawn(['aws', 's3api', 'put-bucket-versioning', '--bucket', bucketName, '--versioning-configuration', 'Status=Enabled', '--region', region], { stdout: 'pipe', stderr: 'pipe', env })
+            await streamRaw(jobId, 'terraform:', vers.stdout)
+            await streamRaw(jobId, 'terraform:', vers.stderr)
+            await vers.exited
+          } catch {}
+        } else {
+          jobService.addLog(jobId, { phase: 'infrastructure', level: 'error', message: `Failed to create S3 bucket: ${bucketName}` })
+          return { success: false }
+        }
+      } else {
+        jobService.addLog(jobId, { phase: 'infrastructure', level: 'info', message: `S3 backend bucket exists: ${bucketName}` })
+      }
+
+      // Check if remote state object exists
+      const headObj = Bun.spawn(['aws', 's3api', 'head-object', '--bucket', bucketName, '--key', stateKey, '--region', region], { stdout: 'pipe', stderr: 'pipe', env })
+      await new Response(headObj.stdout).text();
+      await new Response(headObj.stderr).text();
+      const headObjExit = await headObj.exited
+      if (headObjExit !== 0) {
+        jobService.addLog(jobId, { phase: 'infrastructure', level: 'info', message: `No existing remote state at ${bucketName}/${stateKey} (first run).` })
+      } else {
+        jobService.addLog(jobId, { phase: 'infrastructure', level: 'info', message: `Existing remote state found at ${bucketName}/${stateKey}.` })
+      }
+    } catch {
+    }
+
     jobService.addLog(jobId, { phase: 'infrastructure', level: 'info', message: `Running terraform init (S3 backend: ${bucketName}/${stateKey})...` })
     const init = Bun.spawn([
       'terraform', 'init', '-input=false', '-reconfigure',
