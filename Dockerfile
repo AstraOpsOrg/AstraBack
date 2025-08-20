@@ -2,7 +2,7 @@ FROM oven/bun:latest
 
 USER root
 RUN apt-get update -y \
-	&& apt-get install -y --no-install-recommends ca-certificates curl unzip tar gnupg lsb-release apt-transport-https \
+	&& apt-get install -y --no-install-recommends ca-certificates curl unzip tar gnupg lsb-release apt-transport-https git \
 	&& rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
