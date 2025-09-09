@@ -2,8 +2,8 @@ name: Deploy AstraBack
 
 on:
   push:
-    branches: [ main ]
-
+    tags:
+      - 'v*'
 jobs:
   build-and-push-image:
     runs-on: ubuntu-latest
