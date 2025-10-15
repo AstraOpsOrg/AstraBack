@@ -1,5 +1,6 @@
 {
   "name": "astraback",
+  "version": "1.0.1",
   "scripts": {
     "dev": "bun run --hot src/server.ts",
     "start": "bun run src/server.ts",
